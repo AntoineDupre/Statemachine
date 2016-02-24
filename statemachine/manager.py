@@ -1,4 +1,17 @@
+from contextlib import contextmanager
+from timeit import default_timer as time
 from threading import Thread, Event
+from time import sleep
+
+# Tick context
+@contextmanager
+def tick_context(value, sleep=sleep):
+    """Generate a context that controls the duration of its execution."""
+    start = time()
+    yield
+    sleep_time = start + value - time()
+    if sleep_time > 0:
+        sleep(sleep_time)
 
 
 class StateMachineManager(object):
@@ -18,7 +31,6 @@ class StateMachineManager(object):
         self.state_machine_cls = state_machine_cls
         self.state_machine_kwargs = state_machine_kwargs
         self.running_thread = None
-        self.running = False
         self.evt_run = Event()
         self.evt_end_step = Event()
         self.evt_stop = Event()
@@ -33,15 +45,13 @@ class StateMachineManager(object):
         self.state_machine = self.state_machine_cls(**self.state_machine_kwargs)
         self.running_thread = Thread(target=self.loop)
         self.running_thread.start()
-        self.running = True
 
     def is_running(self):
-        return self.state_machine and self.running
+        return self.state_machine and self.evt_run.isSet()
 
     def pause(self):
         """ break the cycling loop"""
         self.evt_run.clear()
-        self.running = False
 
     def next_step(self):
         """ execute one step loop"""
@@ -54,7 +64,6 @@ class StateMachineManager(object):
     def resume(self):
         """ re-run the cycling loop"""
         self.evt_run.set()
-        self.running = True
 
     def stop(self):
         """ stop the cycling loop"""
@@ -63,15 +72,14 @@ class StateMachineManager(object):
         if self.running_thread is not None:
             self.running_thread.join()
         self.state_machine = None
-        self.running = False
 
     def loop(self):
         """The main loop for one conditioning run."""
         while  not self.state_machine.finished  and  not self.evt_stop.isSet():
-            self.evt_end_step.clear()
-            self.state_machine.proceed()
-            self.evt_end_step.set()
-            self.evt_stop.wait(self.loop_time)  # Defines the period of the loop
+            with tick_context(self.loop_time, sleep=self.evt_stop.wait):
+                self.evt_end_step.clear()
+                self.state_machine.proceed()
+                self.evt_end_step.set()
             while not self.evt_run.isSet():
                 self.evt_run.wait(1.0)  # Paused; do nothing
         self.evt_done.set()
